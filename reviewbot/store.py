@@ -52,6 +52,31 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_user    ON jobs(user);
 CREATE INDEX IF NOT EXISTS idx_jobs_status  ON jobs(status);
+
+-- Per-repo provider config: which LLM provider + API key to use when a
+-- given user (member of one of the listed orgs / users) asks for a
+-- review on a given repository. Replaces the previous env-var-only key
+-- selection so a single deployment can serve many keys.
+--
+-- repo_pattern is either an exact "owner/repo" or an org wildcard
+-- "owner/*". allowed_users / allowed_orgs are JSON arrays of
+-- lowercased GitHub logins.
+CREATE TABLE IF NOT EXISTS provider_configs (
+    id             TEXT PRIMARY KEY,
+    provider       TEXT NOT NULL,
+    api_key        TEXT NOT NULL,
+    api_base       TEXT,
+    default_model  TEXT,
+    repo_pattern   TEXT NOT NULL,
+    allowed_users  TEXT NOT NULL DEFAULT '[]',
+    allowed_orgs   TEXT NOT NULL DEFAULT '[]',
+    created_by     TEXT NOT NULL,
+    created_at     REAL NOT NULL,
+    updated_at     REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_configs_repo
+    ON provider_configs(repo_pattern);
 """
 
 
@@ -254,6 +279,183 @@ class JobStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    # ------------------------------------------------------------------
+    # provider configs
+    # ------------------------------------------------------------------
+    def insert_provider_config(
+        self,
+        *,
+        id: str,
+        provider: str,
+        api_key: str,
+        api_base: Optional[str],
+        default_model: Optional[str],
+        repo_pattern: str,
+        allowed_users: list[str],
+        allowed_orgs: list[str],
+        created_by: str,
+    ) -> None:
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO provider_configs (
+                    id, provider, api_key, api_base, default_model,
+                    repo_pattern, allowed_users, allowed_orgs,
+                    created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    id, provider, api_key, api_base, default_model,
+                    repo_pattern,
+                    json.dumps([u.lower() for u in allowed_users]),
+                    json.dumps([o.lower() for o in allowed_orgs]),
+                    created_by, now, now,
+                ),
+            )
+            self._conn.commit()
+
+    def update_provider_config(
+        self,
+        config_id: str,
+        *,
+        provider: str,
+        api_base: Optional[str],
+        default_model: Optional[str],
+        repo_pattern: str,
+        allowed_users: list[str],
+        allowed_orgs: list[str],
+        new_api_key: Optional[str] = None,
+    ) -> bool:
+        """Update everything except the api_key by default. When
+        ``new_api_key`` is provided, the stored secret is replaced too —
+        otherwise the existing one is preserved (write-only model).
+        Returns True if a row was updated."""
+        now = time.time()
+        with self._lock:
+            if new_api_key is not None:
+                cur = self._conn.execute(
+                    """
+                    UPDATE provider_configs
+                       SET provider = ?, api_key = ?, api_base = ?,
+                           default_model = ?, repo_pattern = ?,
+                           allowed_users = ?, allowed_orgs = ?,
+                           updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        provider, new_api_key, api_base, default_model,
+                        repo_pattern,
+                        json.dumps([u.lower() for u in allowed_users]),
+                        json.dumps([o.lower() for o in allowed_orgs]),
+                        now, config_id,
+                    ),
+                )
+            else:
+                cur = self._conn.execute(
+                    """
+                    UPDATE provider_configs
+                       SET provider = ?, api_base = ?, default_model = ?,
+                           repo_pattern = ?, allowed_users = ?,
+                           allowed_orgs = ?, updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        provider, api_base, default_model, repo_pattern,
+                        json.dumps([u.lower() for u in allowed_users]),
+                        json.dumps([o.lower() for o in allowed_orgs]),
+                        now, config_id,
+                    ),
+                )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def delete_provider_config(self, config_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM provider_configs WHERE id = ?", (config_id,)
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def list_provider_configs(self) -> list[dict[str, Any]]:
+        """All configs, newest-updated first. Caller is responsible for
+        scrubbing api_key before sending to the UI."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, provider, api_key, api_base, default_model,
+                       repo_pattern, allowed_users, allowed_orgs,
+                       created_by, created_at, updated_at
+                  FROM provider_configs
+                 ORDER BY updated_at DESC
+                """
+            ).fetchall()
+        return [_decode_provider_config(r) for r in rows]
+
+    def get_provider_config(self, config_id: str) -> Optional[dict[str, Any]]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM provider_configs WHERE id = ?", (config_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return _decode_provider_config(row)
+
+    def find_provider_config(
+        self,
+        *,
+        user: str,
+        user_orgs: list[str],
+        owner: str,
+        repo: str,
+        provider: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Pick the provider config that should serve this (user, repo).
+
+        Matches when the user is in ``allowed_users`` or one of the
+        ``user_orgs`` is in ``allowed_orgs``, AND ``repo_pattern`` is
+        either ``"{owner}/{repo}"`` or ``"{owner}/*"``. When ``provider``
+        is given, candidates are further filtered to that LLM provider
+        so the form can let the user pick which authorized key to use.
+
+        Exact repo matches win over wildcards; among ties (or among
+        candidates of the same specificity), most-recently-updated wins.
+        Returns None when no config matches."""
+        exact = f"{owner}/{repo}".lower()
+        wildcard = f"{owner}/*".lower()
+        user_lc = user.lower()
+        orgs_lc = {o.lower() for o in user_orgs}
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM provider_configs
+                 WHERE LOWER(repo_pattern) IN (?, ?)
+                 ORDER BY updated_at DESC
+                """,
+                (exact, wildcard),
+            ).fetchall()
+        best_exact: Optional[dict[str, Any]] = None
+        best_wild: Optional[dict[str, Any]] = None
+        for row in rows:
+            cfg = _decode_provider_config(row)
+            if provider is not None and cfg["provider"] != provider:
+                continue
+            allowed_users = {u.lower() for u in cfg["allowed_users"]}
+            allowed_orgs = {o.lower() for o in cfg["allowed_orgs"]}
+            if user_lc not in allowed_users and not (allowed_orgs & orgs_lc):
+                continue
+            pattern = cfg["repo_pattern"].lower()
+            if pattern == exact and best_exact is None:
+                best_exact = cfg
+            elif pattern == wildcard and best_wild is None:
+                best_wild = cfg
+            if best_exact is not None:
+                # Rows are ordered updated_at DESC, so the first exact
+                # match is the freshest — short-circuit.
+                return best_exact
+        return best_exact or best_wild
+
     def list_all_calls(self, limit: int = 500) -> list[dict[str, Any]]:
         """Cross-user journal: every review job ever recorded, newest
         first. Used by the /journal page so any authenticated viewer can
@@ -350,6 +552,21 @@ def decode_draft(s: Optional[str]) -> Optional[ReviewDraft]:
         rejected_count=data.get("rejected_count", 0),
         metrics_line=data.get("metrics_line", ""),
     )
+
+
+def _decode_provider_config(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    for key in ("allowed_users", "allowed_orgs"):
+        raw = d.get(key)
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = []
+            d[key] = parsed if isinstance(parsed, list) else []
+        elif raw is None:
+            d[key] = []
+    return d
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:

@@ -164,6 +164,9 @@ rsync -az --delete \
   --exclude=.DS_Store \
   --exclude='._*' \
   --exclude=node_modules/ \
+  --exclude='*.db' \
+  --exclude='*.db-wal' \
+  --exclude='*.db-shm' \
   "$REPO_ROOT/" "ec2-user@${PRIVATE_IP}:${APP_DIR}/"
 
 REMOTE_SCRIPT=$(cat <<EOF

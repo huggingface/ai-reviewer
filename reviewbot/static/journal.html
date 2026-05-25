@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Serge · journal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand-row">
+      <a href="/" class="brand"><h1>🤗 Serge</h1></a>
+      <!-- POWERED_BY -->
+    </div>
+    <div class="right">
+      <a href="/" class="secondary nav-link">New review</a>
+      <form method="post" action="/auth/logout" style="margin:0">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+  <main>
+    <div id="error-banner"></div>
+    <section class="card">
+      <h2>Call journal <span class="hint" id="journal-count"></span></h2>
+      <p class="hint">Every review call ever made: who ran it, against which PR, with which provider/model, and how many tokens it consumed.</p>
+      <table class="jobs-list">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>User</th>
+            <th>Pull request</th>
+            <th>Provider</th>
+            <th>Model</th>
+            <th>Tokens in</th>
+            <th>Tokens out</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="journal-tbody"></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="/static/journal.js" defer></script>
+</body>
+</html>

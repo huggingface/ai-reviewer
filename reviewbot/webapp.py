@@ -160,6 +160,19 @@ def _current_user(request: Request) -> Optional[str]:
     return user if isinstance(user, str) and user else None
 
 
+def _current_user_orgs(request: Request) -> list[str]:
+    """Orgs the current user belongs to, cached in the signed session
+    cookie at login time. Used to match provider_configs that grant
+    access to a whole org. Returns [] in dev-no-auth mode."""
+    if cfg.web_dev_no_auth:
+        return []
+    sess = _load_session(request)
+    orgs = sess.get("orgs")
+    if isinstance(orgs, list):
+        return [o for o in orgs if isinstance(o, str)]
+    return []
+
+
 def _user_is_allowed(login: str, orgs: list[str]) -> bool:
     if cfg.web_dev_no_auth:
         return True
@@ -186,6 +199,11 @@ class Job:
     llm_api_base: str
     llm_model: Optional[str]
     created_at: float
+    # In-memory only — never persisted, never returned through any API.
+    # Picked from the matched provider_config at submit time so the
+    # worker doesn't need to hit the store again. "" for reconstructed
+    # finished jobs that won't be re-executed.
+    llm_api_key: str = ""
     status: str = "running"  # running | done | error | discarded | published
     draft: Optional[ReviewDraft] = None
     error: Optional[str] = None
@@ -235,7 +253,7 @@ def _normalize_llm_base_url(raw: str) -> str:
     return base
 
 
-def _llm_selection_from_payload(payload: dict[str, Any]) -> tuple[str, str, Optional[str]]:
+def _parse_provider(payload: dict[str, Any]) -> str:
     default_provider = _infer_llm_provider(cfg.llm_api_base)
     provider = (payload.get("llm_provider") or default_provider).strip().lower()
     if provider not in (
@@ -245,72 +263,143 @@ def _llm_selection_from_payload(payload: dict[str, Any]) -> tuple[str, str, Opti
         _LLM_PROVIDER_CUSTOM,
     ):
         raise HTTPException(status_code=400, detail="bad_llm_provider")
+    return provider
 
+
+# A repo pattern is either an exact "owner/repo" or "owner/*". Both
+# pieces follow GitHub's name rules (alphanumerics plus . _ -). The
+# wildcard is a literal "*", not a glob, so the matcher stays trivial.
+_REPO_PATTERN_RE = re.compile(r"^[A-Za-z0-9._-]+/([A-Za-z0-9._-]+|\*)$")
+_VALID_PROVIDERS = (
+    _LLM_PROVIDER_HF,
+    _LLM_PROVIDER_OPENAI,
+    _LLM_PROVIDER_ANTHROPIC,
+    _LLM_PROVIDER_CUSTOM,
+)
+
+
+def _parse_provider_config_payload(
+    payload: dict[str, Any], *, require_api_key: bool
+) -> dict[str, Any]:
+    provider = (payload.get("provider") or "").strip().lower()
+    if provider not in _VALID_PROVIDERS:
+        raise HTTPException(status_code=400, detail="bad_provider")
+    api_key = payload.get("api_key")
+    if require_api_key:
+        if not isinstance(api_key, str) or not api_key.strip():
+            raise HTTPException(status_code=400, detail="api_key_required")
+        api_key = api_key.strip()
+    elif api_key is not None:
+        if not isinstance(api_key, str):
+            raise HTTPException(status_code=400, detail="api_key_must_be_string")
+        api_key = api_key.strip() or None
+    repo_pattern = (payload.get("repo_pattern") or "").strip()
+    if not _REPO_PATTERN_RE.match(repo_pattern):
+        raise HTTPException(status_code=400, detail="bad_repo_pattern")
+    api_base_raw = (payload.get("api_base") or "").strip()
+    api_base: Optional[str] = None
     if provider == _LLM_PROVIDER_CUSTOM:
-        raw_base = (payload.get("llm_base_url") or "").strip()
+        if not api_base_raw:
+            raise HTTPException(status_code=400, detail="api_base_required_for_custom")
+        api_base = _normalize_llm_base_url(api_base_raw)
+    default_model = (payload.get("default_model") or "").strip() or None
+    allowed_users = _parse_login_list(payload.get("allowed_users"), "allowed_users")
+    allowed_orgs = _parse_login_list(payload.get("allowed_orgs"), "allowed_orgs")
+    if not allowed_users and not allowed_orgs:
+        raise HTTPException(
+            status_code=400,
+            detail="allowed_users_or_orgs_required",
+        )
+    return {
+        "provider": provider,
+        "api_key": api_key,
+        "repo_pattern": repo_pattern,
+        "api_base": api_base,
+        "default_model": default_model,
+        "allowed_users": allowed_users,
+        "allowed_orgs": allowed_orgs,
+    }
+
+
+def _parse_login_list(raw: Any, field_name: str) -> list[str]:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, str):
+        items = [s.strip() for s in raw.split(",")]
+    elif isinstance(raw, list):
+        items = []
+        for item in raw:
+            if not isinstance(item, str):
+                raise HTTPException(
+                    status_code=400, detail=f"{field_name}_must_be_string_list"
+                )
+            items.append(item.strip())
+    else:
+        raise HTTPException(
+            status_code=400, detail=f"{field_name}_must_be_string_or_list"
+        )
+    cleaned: list[str] = []
+    for item in items:
+        if not item:
+            continue
+        if not _GH_NAME_RE.match(item):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name}_contains_invalid_login",
+            )
+        cleaned.append(item.lower())
+    # De-dup while preserving order.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in cleaned:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return deduped
+
+
+def _provider_config_summary(row: dict[str, Any]) -> dict[str, Any]:
+    """Scrub api_key before returning to the UI — replaced with a
+    short non-reversible hint so admins can tell which row a key
+    belongs to without exposing the secret."""
+    raw_key = row.get("api_key") or ""
+    if raw_key:
+        # Length and last-4 chars give just enough fingerprint to spot a
+        # stale row without leaking the secret. Short keys (<8 chars)
+        # show no tail.
+        tail = raw_key[-4:] if len(raw_key) >= 8 else ""
+        key_hint = f"set (len={len(raw_key)}, ends={tail})" if tail else "set"
+    else:
+        key_hint = ""
+    return {
+        "id": row["id"],
+        "provider": row["provider"],
+        "api_base": row.get("api_base") or "",
+        "default_model": row.get("default_model") or "",
+        "repo_pattern": row["repo_pattern"],
+        "allowed_users": row.get("allowed_users") or [],
+        "allowed_orgs": row.get("allowed_orgs") or [],
+        "created_by": row.get("created_by") or "",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "api_key_status": key_hint,
+    }
+
+
+def _api_base_for_provider(provider: str, custom_base: Optional[str]) -> str:
+    """Resolve the base URL for a provider. Built-ins are looked up
+    from the static table; custom uses the per-config api_base. Falls
+    back to cfg.llm_api_base only when nothing else is available, so
+    older deployments don't break mid-rollout."""
+    if provider == _LLM_PROVIDER_CUSTOM:
+        raw_base = (custom_base or "").strip()
         if not raw_base:
+            default_provider = _infer_llm_provider(cfg.llm_api_base)
             raw_base = cfg.llm_api_base if default_provider == _LLM_PROVIDER_CUSTOM else ""
         if not raw_base:
             raise HTTPException(status_code=400, detail="llm_base_url_required")
-        api_base = _normalize_llm_base_url(raw_base)
-    else:
-        api_base = _LLM_PROVIDER_BASES[provider]
-
-    model = (
-        payload.get("llm_model")
-        or _LLM_PROVIDER_DEFAULT_MODELS.get(provider)
-        or cfg.llm_model
-        or ""
-    ).strip() or None
-    return provider, api_base, model
-
-
-def _configured_llm_api_key_for_provider(provider: str) -> Optional[str]:
-    default_provider = _infer_llm_provider(cfg.llm_api_base)
-    if provider == _LLM_PROVIDER_HF:
-        return (
-            os.environ.get("HF_API_KEY")
-            or os.environ.get("HUGGINGFACE_API_KEY")
-            or os.environ.get("HF_TOKEN")
-            or cfg.llm_api_key
-        )
-    if provider == _LLM_PROVIDER_OPENAI:
-        return os.environ.get("OPENAI_API_KEY") or (
-            cfg.llm_api_key if default_provider == _LLM_PROVIDER_OPENAI else None
-        )
-    if provider == _LLM_PROVIDER_ANTHROPIC:
-        return os.environ.get("ANTHROPIC_API_KEY") or (
-            cfg.llm_api_key if default_provider == _LLM_PROVIDER_ANTHROPIC else None
-        )
-    return os.environ.get("CUSTOM_LLM_API_KEY") or (
-        cfg.llm_api_key if default_provider == _LLM_PROVIDER_CUSTOM else None
-    )
-
-
-def _llm_key_hint(provider: str) -> str:
-    if provider == _LLM_PROVIDER_HF:
-        return "Set HF_API_KEY, HUGGINGFACE_API_KEY, HF_TOKEN, or LLM_API_KEY."
-    if provider == _LLM_PROVIDER_OPENAI:
-        return "Set OPENAI_API_KEY."
-    if provider == _LLM_PROVIDER_ANTHROPIC:
-        return "Set ANTHROPIC_API_KEY."
-    return "Set CUSTOM_LLM_API_KEY, or make the custom endpoint the default LLM_API_BASE with LLM_API_KEY."
-
-
-def _require_llm_api_key_for_provider(provider: str) -> None:
-    if _configured_llm_api_key_for_provider(provider):
-        return
-    raise HTTPException(
-        status_code=400,
-        detail=f"No API key is configured for provider '{provider}'. {_llm_key_hint(provider)}",
-    )
-
-
-def _llm_api_key_for_provider(provider: str) -> str:
-    key = _configured_llm_api_key_for_provider(provider)
-    if key:
-        return key
-    raise RuntimeError(f"No API key configured for provider {provider!r}")
+        return _normalize_llm_base_url(raw_base)
+    return _LLM_PROVIDER_BASES[provider]
 
 
 def _llm_bill_to_for_provider(provider: str) -> Optional[str]:
@@ -496,7 +585,7 @@ def _run_review_worker(job: Job) -> None:
         worker_cfg = dataclasses.replace(
             cfg,
             llm_api_base=job.llm_api_base,
-            llm_api_key=_llm_api_key_for_provider(job.llm_provider),
+            llm_api_key=job.llm_api_key,
             llm_model=job.llm_model,
             llm_bill_to=_llm_bill_to_for_provider(job.llm_provider),
         )
@@ -780,21 +869,24 @@ async def auth_callback(request: Request) -> Response:
         if not isinstance(login, str) or not login:
             raise HTTPException(status_code=400, detail="oauth_no_login")
 
+        # Always fetch orgs at login: even when web_allowed_orgs is
+        # empty, the provider_configs table uses orgs to gate which API
+        # key a user may consume, so we need the list cached in the
+        # session for later matching.
         orgs: list[str] = []
-        if cfg.web_allowed_orgs:
-            orgs_resp = await client.get(
-                "https://api.github.com/user/orgs",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                },
-            )
-            if orgs_resp.is_success:
-                orgs = [
-                    o.get("login", "")
-                    for o in orgs_resp.json()
-                    if isinstance(o, dict)
-                ]
+        orgs_resp = await client.get(
+            "https://api.github.com/user/orgs",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        if orgs_resp.is_success:
+            orgs = [
+                o.get("login", "")
+                for o in orgs_resp.json()
+                if isinstance(o, dict) and o.get("login")
+            ]
 
     if not _user_is_allowed(login, orgs):
         # /user/orgs honors SAML SSO — if the OAuth token wasn't
@@ -824,9 +916,10 @@ async def auth_callback(request: Request) -> Response:
         )
 
     sess["user"] = login
+    sess["orgs"] = orgs
     response = RedirectResponse("/", status_code=302)
     _save_session(response, sess)
-    log.info("user %s logged in", login)
+    log.info("user %s logged in (orgs=%s)", login, orgs)
     return response
 
 
@@ -949,6 +1042,99 @@ def llm_options(request: Request) -> JSONResponse:
     )
 
 
+@app.get("/admin")
+def admin_page(request: Request) -> Response:
+    if not _current_user(request):
+        return RedirectResponse("/login", status_code=302)
+    return _serve_static("admin.html")
+
+
+@app.get("/admin/providers")
+def admin_list_providers(request: Request) -> JSONResponse:
+    _require_user(request)
+    rows = _store.list_provider_configs()
+    return JSONResponse(
+        {
+            "providers": _VALID_PROVIDERS,
+            "default_models": _LLM_PROVIDER_DEFAULT_MODELS,
+            "configs": [_provider_config_summary(r) for r in rows],
+        }
+    )
+
+
+@app.post("/admin/providers")
+async def admin_create_provider(request: Request) -> JSONResponse:
+    _require_same_origin(request)
+    user = _require_user(request)
+    payload = await request.json()
+    fields = _parse_provider_config_payload(payload, require_api_key=True)
+    config_id = uuid.uuid4().hex
+    _store.insert_provider_config(
+        id=config_id,
+        provider=fields["provider"],
+        api_key=fields["api_key"],
+        api_base=fields["api_base"],
+        default_model=fields["default_model"],
+        repo_pattern=fields["repo_pattern"],
+        allowed_users=fields["allowed_users"],
+        allowed_orgs=fields["allowed_orgs"],
+        created_by=user,
+    )
+    log.info(
+        "user %s added provider config %s (%s for %s)",
+        user, config_id, fields["provider"], fields["repo_pattern"],
+    )
+    row = _store.get_provider_config(config_id)
+    assert row is not None
+    return JSONResponse(_provider_config_summary(row), status_code=201)
+
+
+@app.patch("/admin/providers/{config_id}")
+async def admin_update_provider(
+    request: Request, config_id: str
+) -> JSONResponse:
+    _require_same_origin(request)
+    user = _require_user(request)
+    existing = _store.get_provider_config(config_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="config_not_found")
+    payload = await request.json()
+    # api_key is optional on update — when omitted, keep the stored
+    # secret. When present (non-empty), replace it.
+    fields = _parse_provider_config_payload(payload, require_api_key=False)
+    updated = _store.update_provider_config(
+        config_id,
+        provider=fields["provider"],
+        api_base=fields["api_base"],
+        default_model=fields["default_model"],
+        repo_pattern=fields["repo_pattern"],
+        allowed_users=fields["allowed_users"],
+        allowed_orgs=fields["allowed_orgs"],
+        new_api_key=fields["api_key"],
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="config_not_found")
+    log.info(
+        "user %s updated provider config %s (%s for %s; key_replaced=%s)",
+        user, config_id, fields["provider"], fields["repo_pattern"],
+        fields["api_key"] is not None,
+    )
+    row = _store.get_provider_config(config_id)
+    assert row is not None
+    return JSONResponse(_provider_config_summary(row))
+
+
+@app.delete("/admin/providers/{config_id}")
+def admin_delete_provider(request: Request, config_id: str) -> JSONResponse:
+    _require_same_origin(request)
+    user = _require_user(request)
+    deleted = _store.delete_provider_config(config_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="config_not_found")
+    log.info("user %s deleted provider config %s", user, config_id)
+    return JSONResponse({"status": "deleted"})
+
+
 @app.post("/reviews")
 async def submit_review(request: Request) -> JSONResponse:
     _require_same_origin(request)
@@ -964,8 +1150,34 @@ async def submit_review(request: Request) -> JSONResponse:
     if len(trigger_comment) > _MAX_TRIGGER_COMMENT_CHARS:
         raise HTTPException(status_code=413, detail="comment_too_long")
     owner, repo, number = _parse_pr_ref(pr_ref)
-    llm_provider, llm_api_base, llm_model = _llm_selection_from_payload(payload)
-    _require_llm_api_key_for_provider(llm_provider)
+    llm_provider = _parse_provider(payload)
+    user_orgs = _current_user_orgs(request)
+    matched = _store.find_provider_config(
+        user=user,
+        user_orgs=user_orgs,
+        owner=owner,
+        repo=repo,
+        provider=llm_provider,
+    )
+    if matched is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No provider config grants you access to '{owner}/{repo}' "
+                f"with provider '{llm_provider}'. Add one at /admin."
+            ),
+        )
+    # Per-config api_base wins for custom; built-ins use the static map.
+    llm_api_base = _api_base_for_provider(
+        llm_provider, custom_base=matched.get("api_base") or payload.get("llm_base_url"),
+    )
+    # User-supplied model > config default_model > static per-provider default.
+    requested_model = (payload.get("llm_model") or "").strip()
+    llm_model = (
+        requested_model
+        or (matched.get("default_model") or "").strip()
+        or _LLM_PROVIDER_DEFAULT_MODELS.get(llm_provider, "")
+    ) or None
 
     job = Job(
         id=uuid.uuid4().hex,
@@ -978,6 +1190,7 @@ async def submit_review(request: Request) -> JSONResponse:
         llm_api_base=llm_api_base,
         llm_model=llm_model,
         created_at=time.time(),
+        llm_api_key=matched["api_key"],
     )
     job.loop = asyncio.get_running_loop()
     with _jobs_lock:

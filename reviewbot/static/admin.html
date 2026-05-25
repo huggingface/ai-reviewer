@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Serge · admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand-row">
+      <a href="/" class="brand"><h1>🤗 Serge</h1></a>
+      <!-- POWERED_BY -->
+    </div>
+    <div class="right">
+      <a href="/" class="secondary nav-link">New review</a>
+      <a href="/journal" class="secondary nav-link">Journal</a>
+      <form method="post" action="/auth/logout" style="margin:0">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </div>
+  </header>
+  <main>
+    <div id="error-banner"></div>
+
+    <section class="card">
+      <h2>Provider configs</h2>
+      <p class="hint">
+        Each config binds a provider + API key to a repository (or whole org with <code>owner/*</code>)
+        and the GitHub users/orgs allowed to spend it. When a user submits a review, the most-specific
+        matching config is picked; without a match the submission fails.
+      </p>
+      <p class="hint">
+        API keys are <strong>write-only</strong> — once saved, the value can't be displayed again.
+        Edit a row to replace the key.
+      </p>
+      <table class="jobs-list" id="configs-table">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Repo</th>
+            <th>Default model</th>
+            <th>Users / orgs</th>
+            <th>Key</th>
+            <th>Updated</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="configs-tbody"></tbody>
+      </table>
+      <p id="configs-empty" class="hint" style="display:none;">No provider configs yet — add one below.</p>
+    </section>
+
+    <form class="card" id="config-form">
+      <h2 id="form-title">Add a provider config</h2>
+      <input type="hidden" id="config-id" name="config_id">
+
+      <div class="llm-grid">
+        <div>
+          <label for="provider">Provider</label>
+          <select id="provider" name="provider" required>
+            <option value="hf">HF</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div>
+          <label for="default_model">Default model</label>
+          <div class="hint">Used when the submit form leaves the model field empty.</div>
+          <input type="text" id="default_model" name="default_model" placeholder="model name">
+        </div>
+      </div>
+
+      <div id="api-base-row" style="display:none; margin-top:12px;">
+        <label for="api_base">Base URL</label>
+        <div class="hint">Required for custom providers.</div>
+        <input type="text" id="api_base" name="api_base" placeholder="https://example.com/v1">
+      </div>
+
+      <div style="margin-top:14px;">
+        <label for="api_key">API key</label>
+        <div class="hint" id="api-key-hint">Stored encrypted-at-rest only as much as the SQLite file is.
+          Never returned to the UI after saving.</div>
+        <input type="password" id="api_key" name="api_key" autocomplete="off" placeholder="paste key here">
+      </div>
+
+      <div style="margin-top:14px;">
+        <label for="repo_pattern">Repository</label>
+        <div class="hint">Exact <code>owner/repo</code> or org wildcard <code>owner/*</code>.</div>
+        <input type="text" id="repo_pattern" name="repo_pattern" required placeholder="huggingface/transformers">
+      </div>
+
+      <div class="llm-grid">
+        <div>
+          <label for="allowed_users">Allowed users</label>
+          <div class="hint">Comma-separated GitHub logins.</div>
+          <input type="text" id="allowed_users" name="allowed_users" placeholder="alice, bob">
+        </div>
+        <div>
+          <label for="allowed_orgs">Allowed orgs</label>
+          <div class="hint">Comma-separated GitHub org slugs.</div>
+          <input type="text" id="allowed_orgs" name="allowed_orgs" placeholder="huggingface">
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" type="submit" id="submit-btn">Save</button>
+        <button class="secondary" type="button" id="cancel-btn" style="display:none;">Cancel</button>
+      </div>
+    </form>
+  </main>
+  <script src="/static/admin.js" defer></script>
+</body>
+</html>

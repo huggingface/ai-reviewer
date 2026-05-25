@@ -176,6 +176,15 @@ class Config:
                     "(comma-separated). Set DEV_NO_AUTH=1 to bypass for local testing."
                 )
 
+        # In web mode, per-repo API keys live in the DB (provider_configs)
+        # so LLM_API_KEY is no longer required at startup. Action /
+        # webhook modes still need it because there's no per-request
+        # operator picking a config.
+        if require_web:
+            llm_api_key = os.environ.get("LLM_API_KEY", "")
+        else:
+            llm_api_key = os.environ["LLM_API_KEY"]
+
         return cls(
             github_app_id=app_id,
             github_private_key=private_key,
@@ -185,7 +194,7 @@ class Config:
                 or os.environ.get("LLM_API_BASE")
                 or "https://api.openai.com/v1"
             ).rstrip("/"),
-            llm_api_key=os.environ["LLM_API_KEY"],
+            llm_api_key=llm_api_key,
             llm_model=os.environ.get("LLM_MODEL") or None,
             llm_bill_to=os.environ.get("LLM_BILL_TO") or None,
             llm_max_tokens=_int_env("LLM_MAX_TOKENS", 4096),
