@@ -402,6 +402,43 @@ class JobStore:
             return None
         return _decode_provider_config(row)
 
+    def allowed_orgs_for_repo(self, owner: str, repo: str) -> list[str]:
+        """Union of ``allowed_orgs`` across every provider_config whose
+        ``repo_pattern`` could match ``owner/repo`` (exact or wildcard).
+        Used at request time to decide which orgs are worth probing via
+        the GitHub App when the user's session has no cached org list —
+        e.g. SAML-protected memberships that don't appear in
+        ``/user/orgs``."""
+        exact = f"{owner}/{repo}".lower()
+        wildcard = f"{owner}/*".lower()
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT allowed_orgs FROM provider_configs
+                 WHERE LOWER(repo_pattern) IN (?, ?)
+                """,
+                (exact, wildcard),
+            ).fetchall()
+        seen: set[str] = set()
+        result: list[str] = []
+        for row in rows:
+            raw = row["allowed_orgs"] or "[]"
+            try:
+                items = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, str):
+                    continue
+                lc = item.lower()
+                if lc in seen:
+                    continue
+                seen.add(lc)
+                result.append(lc)
+        return result
+
     def find_provider_config(
         self,
         *,

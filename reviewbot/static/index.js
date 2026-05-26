@@ -2,11 +2,13 @@
   const form = document.getElementById("submit-form");
   const btn = document.getElementById("submit-btn");
   const banner = document.getElementById("error-banner");
+  const prEl = document.getElementById("pr");
   const commentEl = document.getElementById("comment");
   const providerEl = document.getElementById("llm-provider");
   const modelEl = document.getElementById("llm-model");
   const baseUrlEl = document.getElementById("llm-base-url");
   const customBaseRow = document.getElementById("custom-base-row");
+  const providerHint = document.getElementById("provider-hint");
   const jobsSection = document.getElementById("jobs-section");
   const jobsTbody = document.getElementById("jobs-tbody");
   const jobsCount = document.getElementById("jobs-count");
@@ -210,6 +212,78 @@
     }
   }
 
+  // Mirrors the server-side _parse_pr_ref shapes: full GitHub URL,
+  // "owner/repo#NN", or "owner/repo/pull/NN". Returns null when the
+  // string isn't yet a parseable PR reference (e.g. half-typed).
+  function parseOwnerRepo(raw) {
+    const s = (raw || "").trim();
+    if (!s) return null;
+    const name = "[A-Za-z0-9._-]+";
+    let m;
+    m = s.match(new RegExp(`github\\.com/(${name})/(${name})/(?:pull|pulls)/\\d+`));
+    if (m) return { owner: m[1], repo: m[2] };
+    m = s.match(new RegExp(`^(${name})/(${name})#\\d+`));
+    if (m) return { owner: m[1], repo: m[2] };
+    m = s.match(new RegExp(`^(${name})/(${name})/pull/\\d+`));
+    if (m) return { owner: m[1], repo: m[2] };
+    return null;
+  }
+
+  let lookupTimer = 0;
+  let lastLookupKey = "";
+
+  function scheduleProviderLookup() {
+    clearTimeout(lookupTimer);
+    lookupTimer = setTimeout(runProviderLookup, 250);
+  }
+
+  async function runProviderLookup() {
+    const parsed = parseOwnerRepo(prEl.value);
+    if (!parsed) {
+      providerHint.textContent = "";
+      lastLookupKey = "";
+      return;
+    }
+    const key = `${parsed.owner}/${parsed.repo}`.toLowerCase();
+    if (key === lastLookupKey) return;
+    lastLookupKey = key;
+    try {
+      const qs = new URLSearchParams({ owner: parsed.owner, repo: parsed.repo });
+      const r = await fetch(`/reviews/lookup-provider?${qs}`);
+      if (!r.ok) {
+        providerHint.textContent = "";
+        return;
+      }
+      const data = await r.json();
+      if (!data.match) {
+        providerHint.textContent = `No provider config matches ${parsed.owner}/${parsed.repo}. Add one at /admin or your submission will be refused.`;
+        return;
+      }
+      applyMatchedConfig(data.match, parsed);
+    } catch {
+      // Non-fatal — the user can still submit; the server will reject
+      // with the same message if no config matches.
+      providerHint.textContent = "";
+    }
+  }
+
+  function applyMatchedConfig(match, parsed) {
+    providerEl.value = match.provider;
+    if (match.default_model) {
+      modelEl.value = match.default_model;
+    }
+    if (match.provider === "custom" && match.api_base) {
+      baseUrlEl.value = match.api_base;
+    }
+    updateProviderFields();
+    const modelPart = match.default_model ? ` · model ${match.default_model}` : "";
+    const scope =
+      match.repo_pattern && match.repo_pattern !== `${parsed.owner}/${parsed.repo}`
+        ? ` (via ${match.repo_pattern})`
+        : "";
+    providerHint.textContent = `Using ${match.provider}${modelPart}${scope}.`;
+  }
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     btn.disabled = true;
@@ -254,8 +328,18 @@
   modelEl.addEventListener("change", saveLlmPrefs);
   baseUrlEl.addEventListener("change", saveLlmPrefs);
 
+  // Auto-fill provider/model from the matching DB config whenever the
+  // PR field changes. Debounced so we don't hit the endpoint on every
+  // keystroke, and short-circuited by lastLookupKey when the
+  // owner/repo hasn't actually changed.
+  prEl.addEventListener("input", scheduleProviderLookup);
+  prEl.addEventListener("change", runProviderLookup);
+
   loadLlmOptions();
   loadJobs();
+  // Catch the case where the input already has a value at load time
+  // (e.g. browser autofill or a prefilled paste).
+  runProviderLookup();
   // Soft-refresh every 5s so running reviews tick over to "done" /
   // "published" without the user having to reload.
   setInterval(loadJobs, 5000);

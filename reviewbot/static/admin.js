@@ -110,13 +110,18 @@
     for (const cfg of configs) {
       const tr = document.createElement("tr");
 
+      const tdRepo = document.createElement("td");
+      tdRepo.textContent = cfg.repo_pattern;
+      tr.appendChild(tdRepo);
+
       const tdProvider = document.createElement("td");
       tdProvider.textContent = cfg.provider;
       tr.appendChild(tdProvider);
 
-      const tdRepo = document.createElement("td");
-      tdRepo.textContent = cfg.repo_pattern;
-      tr.appendChild(tdRepo);
+      const tdBase = document.createElement("td");
+      tdBase.textContent = cfg.api_base || "—";
+      tdBase.title = cfg.api_base || "";
+      tr.appendChild(tdBase);
 
       const tdModel = document.createElement("td");
       tdModel.textContent = cfg.default_model || "—";

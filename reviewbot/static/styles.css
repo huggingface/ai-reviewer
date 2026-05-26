@@ -147,6 +147,11 @@ a.nav-link {
   line-height: 1;
 }
 a.nav-link:hover { opacity: 0.85; }
+a.nav-link[aria-current="page"] {
+  background: var(--bg);
+  color: var(--muted);
+  pointer-events: none;
+}
 
 .actions { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
 

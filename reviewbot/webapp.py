@@ -173,6 +173,54 @@ def _current_user_orgs(request: Request) -> list[str]:
     return []
 
 
+def _effective_user_orgs_for_repo(
+    request: Request,
+    response: Optional[Response],
+    user: str,
+    owner: str,
+    repo: str,
+) -> list[str]:
+    """Return the user's effective orgs for matching configs on this
+    repo: session-cached orgs plus any App-verified memberships among
+    the ``allowed_orgs`` of candidate configs. This is the workaround
+    for SAML-protected orgs (which never appear in the user's
+    ``/user/orgs`` response, so the login-time cache is empty) and for
+    legacy sessions minted before orgs were persisted.
+
+    When new orgs are discovered, the merged list is written back to
+    the session cookie so subsequent requests skip the App round-trip.
+    """
+    base = _current_user_orgs(request)
+    if cfg.web_dev_no_auth or not (cfg.github_app_id and cfg.github_private_key):
+        return base
+    candidates = _store.allowed_orgs_for_repo(owner, repo)
+    if not candidates:
+        return base
+    base_lc = {o.lower() for o in base}
+    extra: list[str] = []
+    for org in candidates:
+        if org.lower() in base_lc:
+            continue
+        try:
+            if user_is_org_member(cfg.github_app_id, cfg.github_private_key, org, user):
+                extra.append(org)
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "App-based org membership check failed for %s in %s", user, org,
+                exc_info=True,
+            )
+    if not extra:
+        return base
+    merged = list(dict.fromkeys([*base, *extra]))
+    log.info("expanded session orgs for %s: %s -> %s", user, base, merged)
+    if response is not None:
+        sess = _load_session(request)
+        sess["user"] = user
+        sess["orgs"] = merged
+        _save_session(response, sess)
+    return merged
+
+
 def _user_is_allowed(login: str, orgs: list[str]) -> bool:
     if cfg.web_dev_no_auth:
         return True
@@ -1042,6 +1090,49 @@ def llm_options(request: Request) -> JSONResponse:
     )
 
 
+@app.get("/reviews/lookup-provider")
+def lookup_provider(
+    request: Request, owner: str, repo: str
+) -> JSONResponse:
+    """Pre-flight match for the submit form: given a (owner, repo)
+    pulled from the PR field as the user types, return the provider +
+    default model from the best-matching ``provider_config`` so the UI
+    can auto-fill its dropdown. Never returns the api_key — only the
+    fields the form is allowed to display. Returns ``match: null`` when
+    no config matches; the form then shows a hint that submission will
+    be refused until an admin adds one."""
+    user = _require_user(request)
+    if not _GH_NAME_RE.match(owner) or not _GH_NAME_RE.match(repo):
+        raise HTTPException(status_code=400, detail="bad_repo")
+    # Build the response first so the org-augmenting helper can attach
+    # a refreshed session cookie to it when new memberships are
+    # discovered via the App.
+    payload: dict[str, Any] = {"match": None}
+    placeholder = JSONResponse(payload)
+    user_orgs = _effective_user_orgs_for_repo(
+        request, placeholder, user, owner, repo,
+    )
+    matched = _store.find_provider_config(
+        user=user, user_orgs=user_orgs, owner=owner, repo=repo,
+    )
+    if matched is not None:
+        payload = {
+            "match": {
+                "provider": matched["provider"],
+                "default_model": matched.get("default_model") or "",
+                "api_base": matched.get("api_base") or "",
+                "repo_pattern": matched["repo_pattern"],
+            }
+        }
+    final = JSONResponse(payload)
+    # Forward the session cookie that the helper attached to the
+    # placeholder so the augmented orgs persist across requests.
+    cookie = placeholder.headers.get("set-cookie")
+    if cookie:
+        final.raw_headers.append((b"set-cookie", cookie.encode("latin-1")))
+    return final
+
+
 @app.get("/admin")
 def admin_page(request: Request) -> Response:
     if not _current_user(request):
@@ -1151,7 +1242,13 @@ async def submit_review(request: Request) -> JSONResponse:
         raise HTTPException(status_code=413, detail="comment_too_long")
     owner, repo, number = _parse_pr_ref(pr_ref)
     llm_provider = _parse_provider(payload)
-    user_orgs = _current_user_orgs(request)
+    # Stash any newly-discovered orgs on the eventual response so a
+    # SAML-protected user doesn't pay the App-membership round-trip on
+    # every subsequent submission.
+    session_response = JSONResponse({})
+    user_orgs = _effective_user_orgs_for_repo(
+        request, session_response, user, owner, repo,
+    )
     matched = _store.find_provider_config(
         user=user,
         user_orgs=user_orgs,
@@ -1223,7 +1320,7 @@ async def submit_review(request: Request) -> JSONResponse:
         llm_model or "<auto>",
         llm_api_base,
     )
-    return JSONResponse(
+    final = JSONResponse(
         {
             "id": job.id,
             "owner": owner,
@@ -1232,6 +1329,10 @@ async def submit_review(request: Request) -> JSONResponse:
             "url": f"/reviews/{owner}/{repo}/{number}/{job.id}",
         }
     )
+    cookie = session_response.headers.get("set-cookie")
+    if cookie:
+        final.raw_headers.append((b"set-cookie", cookie.encode("latin-1")))
+    return final
 
 
 def _parse_pr_ref(ref: str) -> tuple[str, str, int]:
