@@ -14,8 +14,6 @@ It runs in three modes off the same codebase. Pick one:
 | **GitHub App** | Many repos, auto-review on every mention | A hosted webhook server |
 | **Web app** | Human-in-the-loop: edit a review before posting | A hosted server + OAuth |
 
----
-
 ## Setup
 
 ### Mode 1 — GitHub Action (quickest)
@@ -108,8 +106,6 @@ Set `DEV_NO_AUTH=1` to skip OAuth for local clicking-around (never in
 production). The repo also ships a single-VM EC2 bootstrap in
 [`aws/`](aws/README.md).
 
----
-
 ## Configuration
 
 All modes share the same settings — as **Action inputs** (Mode 1) or
@@ -139,8 +135,6 @@ read from the **default branch** (so PR authors can't rewrite the rules in
 their own branch) and injected into the system prompt. Repos can also supply
 an executable `.ai/context-script` and scoped helper CLIs via
 `.ai/review-tools.json` — see [`action.yml`](action.yml) for details.
-
----
 
 ## How it works
 
@@ -190,8 +184,6 @@ reviewbot/
 tests/              unittest suite
 aws/                Single-VM EC2 bootstrap for the web app
 ```
-
----
 
 ## Limitations
 
