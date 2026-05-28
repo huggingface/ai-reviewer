@@ -118,6 +118,11 @@ class Config:
     # Kimi-K2 thinking variants, etc.). Common values: "low", "medium",
     # "high". Leave empty to omit the parameter entirely.
     llm_reasoning_effort: Optional[str] = None
+    # Public URL to install/configure the GitHub App that backs this
+    # deployment. Surfaced on the /help page as the "Install the app"
+    # link. Defaults to the Hugging Face Serge App; override per-deploy
+    # via WEB_GITHUB_APP_URL.
+    web_github_app_url: Optional[str] = "https://github.com/apps/sergereview"
 
     @classmethod
     def from_env(
@@ -258,4 +263,6 @@ class Config:
                 "WEB_CLONE_CACHE_TTL_SECONDS", 7 * 24 * 3600
             ),
             web_clone_depth=_int_env("WEB_CLONE_DEPTH", 50),
+            web_github_app_url=(os.environ.get("WEB_GITHUB_APP_URL") or "").strip()
+            or "https://github.com/apps/sergereview",
         )

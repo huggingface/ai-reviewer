@@ -29,6 +29,37 @@ If you want the same no-auth behavior as your local command, keep
 `DEV_NO_AUTH=1` in `reviewbot-web.env`. On a shared or public host,
 remove that and configure `WEB_ALLOWED_USERS` or `WEB_ALLOWED_ORG`.
 
+## HTTPS (nginx + exported ACM cert)
+
+`serge.huggingface.tech` resolves straight to the box's private IP over the
+VPN, so TLS is terminated **on the box** by nginx — no load balancer, no DNS
+change. The app stays on `8080`; nginx listens on 443 and proxies to it.
+
+The cert is an **exportable ACM public certificate** (publicly trusted and
+installable outside AWS). Export it (cert + chain + private key) — if you
+used `aws acm export-certificate`, the key comes back passphrase-encrypted,
+so decrypt it first:
+
+```bash
+openssl rsa -in encrypted-key.pem -out key.pem      # prompts for the passphrase
+```
+
+Then push it to the box and bring up nginx:
+
+```bash
+CERT_FILE=cert.pem KEY_FILE=key.pem CHAIN_FILE=chain.pem ./aws/setup-tls.sh
+```
+
+`setup-tls.sh` uploads the cert/key to `/etc/reviewbot/tls/` (mode `0600`,
+root-owned) and runs `provision-tls.sh` on the host, which installs nginx and
+writes a 443 vhost (HTTP→HTTPS redirect, SSE-friendly proxy to `8080`). The
+instance security group already admits 80/443 from the VPN via its same-SG
+rule, so nothing else is needed. Verify with
+`curl -sSf https://serge.huggingface.tech/healthz`.
+
+**Renewal:** an exported cert is a static copy — when it renews/expires,
+re-export and re-run `setup-tls.sh`; the box won't update itself.
+
 ## Updating an existing deployment
 
 `./aws/update.sh` refreshes an already-deployed box in place — no
@@ -54,12 +85,14 @@ Destroy the stack with `./aws/destroy.sh`.
 
 ## Security notes
 
-- The instance is launched without a public IP and listens on
-  `0.0.0.0:8080` plain HTTP. That's safe **only** while the box sits
-  inside a VPN / private network. If you ever expose it to the public
-  internet, terminate TLS in front of it (e.g. nginx + Let's Encrypt)
-  and flip `DEV_NO_AUTH` off — the session cookie's `Secure` flag is
-  tied to `DEV_NO_AUTH=1`, so plain HTTP works only in that mode.
+- The app listens on `0.0.0.0:8080` plain HTTP and has no public IP;
+  clients reach it as `https://serge.huggingface.tech` via nginx on the
+  box (see "HTTPS" above), which terminates TLS with the ACM cert. The
+  whole box sits inside the VPN. Because the browser↔nginx hop is HTTPS,
+  the session cookie's `Secure` flag is correct with `WEB_INSECURE_COOKIES=0`
+  — that flag is decoupled from `DEV_NO_AUTH`.
+- The exported cert + key live at `/etc/reviewbot/tls/{fullchain,privkey}.pem`,
+  mode `0600` root-owned — only root (the nginx master) can read the key.
 - `WEB_SESSION_SECRET` must be a real random value. `deploy.sh` and
   `update.sh` mint one with `openssl rand -hex 32` if your env still has
   the example placeholder, and write the value back to

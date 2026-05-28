@@ -754,6 +754,7 @@ def _serve_static(name: str) -> HTMLResponse:
         html = f.read()
     if name.endswith(".html"):
         html = html.replace("<!-- POWERED_BY -->", _powered_by_html())
+        html = html.replace("<!-- APP_INSTALL_LINK -->", _app_install_html())
     return HTMLResponse(html)
 
 
@@ -765,6 +766,26 @@ def _powered_by_html() -> str:
         f'<a href="{_html.escape(url, quote=True)}" '
         f'target="_blank" rel="noopener noreferrer">'
         "HF Inference Providers</a></span>"
+    )
+
+
+def _app_install_html() -> str:
+    """Render the "install the GitHub App" link for the help page,
+    using WEB_GITHUB_APP_URL when set. Falls back to a hint pointing
+    operators at the env var so deployments without the variable still
+    get a useful page."""
+    url = (cfg.web_github_app_url or "").strip()
+    if not url:
+        return (
+            '<span class="hint">Ask your deployment admin for the App '
+            "install URL, or set <code>WEB_GITHUB_APP_URL</code> in the "
+            "server environment so this page can link to it.</span>"
+        )
+    escaped = _html.escape(url, quote=True)
+    return (
+        f'<a href="{escaped}" target="_blank" rel="noopener noreferrer">'
+        "<button class=\"primary\" type=\"button\">Install the GitHub App</button>"
+        "</a>"
     )
 
 
@@ -785,6 +806,13 @@ def journal_page(request: Request) -> Response:
     if not _current_user(request):
         return RedirectResponse("/login", status_code=302)
     return _serve_static("journal.html")
+
+
+@app.get("/help")
+def help_page(request: Request) -> Response:
+    if not _current_user(request):
+        return RedirectResponse("/login", status_code=302)
+    return _serve_static("help.html")
 
 
 @app.get("/login")

@@ -501,3 +501,19 @@ table.jobs-list td a {
 }
 table.jobs-list td a:hover { text-decoration: underline; }
 table.jobs-list td.ago { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+ol.help-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  counter-reset: step;
+}
+ol.help-steps > li {
+  border-top: 1px solid var(--border);
+  padding: 18px 0 6px;
+}
+ol.help-steps > li:first-child { border-top: 0; padding-top: 4px; }
+ol.help-steps > li h3 { margin: 0 0 8px; font-size: 1rem; }
+ol.help-steps > li p { margin: 6px 0; }
+ol.help-steps > li ul { margin: 6px 0 6px 18px; padding: 0; }
+ol.help-steps > li ul li { margin-bottom: 4px; }
