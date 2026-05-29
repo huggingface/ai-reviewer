@@ -115,6 +115,53 @@ class WebappWebhookTests(unittest.TestCase):
         self.assertEqual(req.number, 42)
         self.assertIsNotNone(req.inline)
 
+    def test_webhook_worker_uses_db_provider_config_for_repo(self) -> None:
+        if TestClient is None:
+            self.skipTest("fastapi is not installed")
+        webapp = self._import_webapp()
+        # A provider_config matching the repo should drive the worker's
+        # LLM credentials — repo-only match, no logged-in user needed.
+        webapp._store.insert_provider_config(
+            id="cfg-1",
+            provider="anthropic",
+            api_key="db-anthropic-key",
+            api_base=None,
+            default_model="claude-opus-4-6",
+            repo_pattern="acme/widgets",
+            allowed_users=[],
+            allowed_orgs=["acme-org"],
+            created_by="admin",
+        )
+        client = TestClient(webapp.app)
+        body = json.dumps(_inline_payload()).encode()
+
+        with (
+            patch.object(
+                webapp._WEBHOOK_REVIEW_POOL,
+                "submit",
+                side_effect=lambda fn, *args: fn(*args),
+            ),
+            patch.object(webapp, "installation_token", return_value="github-token"),
+            patch.object(webapp, "GitHubClient"),
+            patch.object(webapp, "run_followup") as run_followup,
+        ):
+            response = client.post(
+                "/webhook",
+                content=body,
+                headers={
+                    "X-GitHub-Event": "pull_request_review_comment",
+                    "X-Hub-Signature-256": _signature("webhook-secret", body),
+                },
+            )
+
+        self.assertEqual(response.status_code, 202)
+        run_followup.assert_called_once()
+        cfg = run_followup.call_args.args[0]
+        # DB row wins over the global LLM_API_KEY / base / model.
+        self.assertEqual(cfg.llm_api_key, "db-anthropic-key")
+        self.assertEqual(cfg.llm_api_base, "https://api.anthropic.com")
+        self.assertEqual(cfg.llm_model, "claude-opus-4-6")
+
 
 if __name__ == "__main__":
     unittest.main()

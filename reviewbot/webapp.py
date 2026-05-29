@@ -317,10 +317,37 @@ def _verify_webhook_signature(body: bytes, header: str) -> bool:
 def _run_webhook_review_worker(installation_id: int, req: ReviewRequest) -> None:
     try:
         assert cfg.github_app_id and cfg.github_private_key
-        llm_api_key = cfg.llm_api_key.strip()
+        # Resolve LLM credentials from the DB the same way the staged web
+        # app does, but matched on repo only — a webhook has no logged-in
+        # user to gate allowed_users/allowed_orgs on, so the App being
+        # installed on the repo is the authorization. Fall back to the
+        # global env config when no provider_config matches the repo.
+        matched = _store.find_provider_config_for_repo(owner=req.owner, repo=req.repo)
+        if matched is not None:
+            provider = matched["provider"]
+            llm_api_key = (matched.get("api_key") or "").strip()
+            llm_api_base = _api_base_for_provider(
+                provider, custom_base=matched.get("api_base")
+            )
+            llm_model = (
+                (matched.get("default_model") or "").strip()
+                or _LLM_PROVIDER_DEFAULT_MODELS.get(provider, "")
+                or cfg.llm_model
+            )
+            worker_cfg = dataclasses.replace(
+                cfg,
+                llm_api_key=llm_api_key,
+                llm_api_base=llm_api_base,
+                llm_model=llm_model,
+                llm_bill_to=_llm_bill_to_for_provider(provider),
+            )
+        else:
+            llm_api_key = cfg.llm_api_key.strip()
+            worker_cfg = dataclasses.replace(cfg, llm_api_key=llm_api_key)
         if not llm_api_key:
             log.error(
-                "webhook review for %s/%s#%d skipped: LLM_API_KEY is not configured",
+                "webhook review for %s/%s#%d skipped: no LLM API key "
+                "(no matching provider_config and LLM_API_KEY is unset)",
                 req.owner,
                 req.repo,
                 req.number,
@@ -330,7 +357,6 @@ def _run_webhook_review_worker(installation_id: int, req: ReviewRequest) -> None
             cfg.github_app_id, cfg.github_private_key, installation_id
         )
         gh = GitHubClient(token)
-        worker_cfg = dataclasses.replace(cfg, llm_api_key=llm_api_key)
         if req.inline is not None:
             run_followup(worker_cfg, gh, req)
         else:

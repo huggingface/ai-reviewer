@@ -524,6 +524,50 @@ class JobStore:
                 return best_exact
         return best_exact or best_wild
 
+    def find_provider_config_for_repo(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        provider: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Repo-only provider config lookup for webhook mode.
+
+        Unlike :meth:`find_provider_config`, this ignores
+        ``allowed_users`` / ``allowed_orgs``: webhook reviews have no
+        logged-in user to gate on, so the GitHub App being installed on
+        the repo is treated as sufficient authorization. Matching on
+        ``repo_pattern`` is identical — exact ``"{owner}/{repo}"`` wins
+        over the ``"{owner}/*"`` wildcard, and among ties the
+        most-recently-updated row wins. When ``provider`` is given,
+        candidates are filtered to that LLM provider. Returns None when
+        no config matches the repo."""
+        exact = f"{owner}/{repo}".lower()
+        wildcard = f"{owner}/*".lower()
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM provider_configs
+                 WHERE LOWER(repo_pattern) IN (?, ?)
+                 ORDER BY updated_at DESC
+                """,
+                (exact, wildcard),
+            ).fetchall()
+        best_exact: Optional[dict[str, Any]] = None
+        best_wild: Optional[dict[str, Any]] = None
+        for row in rows:
+            cfg = _decode_provider_config(row)
+            if provider is not None and cfg["provider"] != provider:
+                continue
+            pattern = cfg["repo_pattern"].lower()
+            if pattern == exact and best_exact is None:
+                best_exact = cfg
+            elif pattern == wildcard and best_wild is None:
+                best_wild = cfg
+            if best_exact is not None:
+                return best_exact
+        return best_exact or best_wild
+
     def list_all_calls(self, limit: int = 500) -> list[dict[str, Any]]:
         """Cross-user journal: every review job ever recorded, newest
         first. Used by the /journal page so any authenticated viewer can
