@@ -13,8 +13,19 @@ import sys
 
 from .config import Config
 from .github_client import GitHubClient
+from .llm_client import LLMResponseError
 from .reviewer import run_followup, run_review
 from .triggers import build_review_request
+
+
+def _format_llm_response_error(exc: LLMResponseError) -> str:
+    excerpt = exc.body_preview.strip()
+    if len(excerpt) > 600:
+        excerpt = excerpt[:600] + "..."
+    reason_part = f" {exc.reason}" if exc.reason else ""
+    if excerpt:
+        return f"LLM endpoint returned {exc.status_code}{reason_part}: {excerpt}"
+    return f"LLM endpoint returned {exc.status_code}{reason_part}"
 
 
 def main() -> int:
@@ -43,6 +54,12 @@ def main() -> int:
         return 1
 
     cfg = Config.from_env(require_app=False)
+    cfg.llm_api_key = cfg.llm_api_key.strip()
+    if not cfg.llm_api_key:
+        log.error(
+            "LLM_API_KEY missing (forgot to pass it via env or inputs.llm_api_key?)"
+        )
+        return 1
 
     req = build_review_request(event_name, payload, cfg.mention_trigger)
     if req is None:
@@ -59,6 +76,24 @@ def main() -> int:
             run_followup(cfg, gh, req)
         else:
             run_review(cfg, gh, req)
+    except LLMResponseError as exc:
+        message = _format_llm_response_error(exc)
+        log.warning("review failed: %s", message)
+        body = f"⚠️ Review failed: `{message}`"
+        if cfg.persona_header:
+            body = f"{cfg.persona_header}\n\n{body}"
+        try:
+            # On inline-comment failures, post the failure as a reply
+            # on the same thread so the commenter sees it in-context.
+            if req.inline is not None:
+                gh.reply_to_review_comment(
+                    req.owner, req.repo, req.number, req.inline.comment_id, body
+                )
+            else:
+                gh.post_issue_comment(req.owner, req.repo, req.number, body)
+        except Exception as post_exc:
+            log.warning("failed to post failure comment to PR: %s", post_exc)
+        return 1
     except Exception as exc:
         log.exception("review failed")
         body = f"⚠️ Review failed: `{type(exc).__name__}: {exc}`"
@@ -73,8 +108,8 @@ def main() -> int:
                 )
             else:
                 gh.post_issue_comment(req.owner, req.repo, req.number, body)
-        except Exception:
-            log.exception("failed to post failure comment to PR")
+        except Exception as post_exc:
+            log.warning("failed to post failure comment to PR: %s", post_exc)
         return 1
     return 0
 

@@ -784,7 +784,7 @@ def _app_install_html() -> str:
     escaped = _html.escape(url, quote=True)
     return (
         f'<a href="{escaped}" target="_blank" rel="noopener noreferrer">'
-        "<button class=\"primary\" type=\"button\">Install the GitHub App</button>"
+        '<button class="primary" type="button">Install the GitHub App</button>'
         "</a>"
     )
 
