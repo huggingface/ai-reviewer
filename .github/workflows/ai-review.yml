@@ -25,8 +25,7 @@ on:
 permissions:
   contents: read
   # Required so the Tailscale action can mint a GitHub OIDC JWT and
-  # authenticate to the tailnet via workload-identity federation (no
-  # long-lived auth key).
+  # authenticate to the tailnet via workload-identity federation.
   id-token: write
 
 jobs:
@@ -50,9 +49,11 @@ jobs:
     concurrency:
       group: claude-ai-review-${{ github.event.issue.number || github.event.pull_request.number }}
       cancel-in-progress: false
-    # Must join Tailscale so https://serge.huggingface.tech/ is reachable.
-    runs-on:
-      group: aws-general-8-plus
+    # A clean GitHub-hosted runner (not the self-hosted VPN group, whose
+    # pre-existing tailscaled collided with the action's own daemon). The
+    # Tailscale step below joins this runner to the tailnet so
+    # https://serge.huggingface.tech/ is reachable.
+    runs-on: ubuntu-latest
     steps:
       - name: Connect to Tailscale
         uses: tailscale/github-action@v4
