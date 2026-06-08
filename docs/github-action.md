@@ -1,6 +1,6 @@
 ---
 title: GitHub Action
-nav_title: Action
+nav_title: GH Action
 ---
 
 The GitHub Action runs inside the target repository's workflow. It is the

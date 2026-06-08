@@ -1,6 +1,6 @@
 ---
 title: Getting Started
-nav_title: Start
+nav_title: Quick Start
 ---
 
 The quickest way to run `ai-reviewer` is the GitHub Action. It needs an LLM API

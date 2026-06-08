@@ -6,12 +6,25 @@
 .site-header-inner {
   align-items: center;
   display: flex;
+  flex-wrap: nowrap;
   gap: 24px;
   min-height: 55px;
+  // Breathing room so the title + menu aren't jammed against the very
+  // top edge of the page.
+  padding: 14px 0;
 }
 
 .site-title {
   flex: 0 0 auto;
+}
+
+// Keep the title + menu on a single row: let the nav take the remaining
+// width and scroll horizontally if it ever overflows, instead of
+// wrapping the menu onto a second line under the title.
+.site-nav {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .site-title-with-icon {
