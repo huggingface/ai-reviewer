@@ -31,6 +31,25 @@ environment variables in server modes.
 | `ALLOW_APPROVE` | none | `false` | Allows publishing `APPROVE` events in App/web mode. |
 | `PERSONA_HEADER` | none | `🤗 **Serge** says:` | Prefix for failure comments and bot messages. |
 
+## Context Compression
+
+Opt-in compression of token-heavy context (tool outputs, older turns) before
+each LLM call, via the [`headroom-ai`](https://github.com/chopratejas/headroom)
+package. Install the extra with `pip install '.[headroom]'` (the Action pulls
+it in automatically when `headroom_compress` is on). It is a no-op if the
+package is missing or a compression call fails, so a review never breaks on it.
+
+| Env var | Action input | Default | Description |
+| ------- | ------------ | ------- | ----------- |
+| `HEADROOM_COMPRESS` | `headroom_compress` | `false` | Master switch. |
+| `HEADROOM_TARGET_RATIO` | `headroom_target_ratio` | unset | Keep-ratio for text compression (e.g. `0.5`). Empty lets headroom decide. |
+| `HEADROOM_COMPRESS_USER_MESSAGES` | `headroom_compress_user_messages` | `false` | Also compress user messages (the annotated diff). Off keeps cited lines intact. |
+| `HEADROOM_COMPRESS_SYSTEM_MESSAGES` | `headroom_compress_system_messages` | `true` | Compress system messages. |
+| `HEADROOM_PROTECT_RECENT` | `headroom_protect_recent` | `4` | Never compress the last N messages. |
+| `HEADROOM_MIN_TOKENS` | `headroom_min_tokens` | `250` | Skip messages shorter than this many tokens. |
+| `HEADROOM_KOMPRESS_MODEL` | `headroom_kompress_model` | unset | Kompress model id, or `disabled` to skip ML compression. |
+| `HEADROOM_MODEL_LIMIT` | `headroom_model_limit` | `200000` | Model context window (tokens) used for sizing. |
+
 ## Repository Context and Tools
 
 | Env var | Action input | Default | Description |
