@@ -163,5 +163,79 @@ class WebappWebhookTests(unittest.TestCase):
         self.assertEqual(cfg.llm_model, "claude-opus-4-6")
 
 
+class HfModelsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+        sys.modules.pop("reviewbot.webapp", None)
+
+    def _import_webapp(self):
+        env = {
+            "DEV_NO_AUTH": "1",
+            "GITHUB_APP_ID": "123",
+            "GITHUB_PRIVATE_KEY": "dummy-private-key",
+            "GITHUB_WEBHOOK_SECRET": "webhook-secret",
+            "LLM_API_KEY": "llm-token",
+            "WEB_STORE_PATH": os.path.join(self.tmpdir, "jobs.db"),
+            "WEB_CLONE_CACHE_DIR": os.path.join(self.tmpdir, "clones"),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            return importlib.import_module("reviewbot.webapp")
+
+    def test_parser_keeps_only_live_tool_capable_models_sorted(self) -> None:
+        webapp = self._import_webapp()
+        payload = {
+            "data": [
+                {
+                    "id": "zeta/Tooler",
+                    "providers": [{"status": "live", "supports_tools": True}],
+                },
+                {
+                    "id": "alpha/Tooler",
+                    "providers": [
+                        {"status": "error", "supports_tools": True},
+                        {"status": "live", "supports_tools": True},
+                    ],
+                },
+                {
+                    # No tool support anywhere — dropped.
+                    "id": "beta/NoTools",
+                    "providers": [{"status": "live", "supports_tools": False}],
+                },
+                {
+                    # Tool support but not live — dropped.
+                    "id": "gamma/Staging",
+                    "providers": [{"status": "staging", "supports_tools": True}],
+                },
+                {"id": "", "providers": [{"status": "live", "supports_tools": True}]},
+            ]
+        }
+        self.assertEqual(
+            webapp._tool_capable_hf_models(payload),
+            ["alpha/Tooler", "zeta/Tooler"],
+        )
+
+    def test_parser_tolerates_garbage(self) -> None:
+        webapp = self._import_webapp()
+        self.assertEqual(webapp._tool_capable_hf_models({}), [])
+        self.assertEqual(webapp._tool_capable_hf_models({"data": "nope"}), [])
+        self.assertEqual(webapp._tool_capable_hf_models("nope"), [])
+
+    def test_endpoint_returns_cached_models(self) -> None:
+        if TestClient is None:
+            self.skipTest("fastapi is not installed")
+        webapp = self._import_webapp()
+        # Seed the in-process cache so the endpoint serves it without
+        # touching the network.
+        webapp._hf_models_cache["models"] = ["Qwen/Qwen3", "meta-llama/Llama-4"]
+        webapp._hf_models_cache["fetched_at"] = webapp.time.monotonic()
+        client = TestClient(webapp.app)
+        response = client.get("/llm-options/hf-models")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["models"], ["Qwen/Qwen3", "meta-llama/Llama-4"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
