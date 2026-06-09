@@ -1,8 +1,8 @@
 ---
-title: ai-reviewer
+title: serge
 ---
 
-`ai-reviewer` reviews pull requests with an OpenAI-compatible LLM and posts
+`serge` reviews pull requests with an OpenAI-compatible LLM and posts
 inline comments through GitHub's Pull Request Reviews API. The default persona
 is Serge, and the default trigger is `@askserge`.
 

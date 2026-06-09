@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Dogfood context-script for ai-reviewer itself.
+"""Dogfood context-script for serge itself.
 
-ai-reviewer invokes this with a JSON document on stdin describing the
+serge invokes this with a JSON document on stdin describing the
 PR (title, body, modified-files list); whatever we print to stdout gets
 stitched into the reviewer's user prompt as repo-supplied context.
 
@@ -113,7 +113,7 @@ def main() -> int:
         only = next(iter(touched_entry))
         other = next(iter(entrypoints - touched_entry))
         notes.append(
-            f"- `{only}` changed but `{other}` did not. ai-reviewer ships in "
+            f"- `{only}` changed but `{other}` did not. serge ships in "
             "two modes (Flask webhook / GitHub Action). A change that fixes "
             "one entry point can silently break the other — verify the "
             "behavior is consistent across both."

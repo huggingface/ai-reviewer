@@ -62,7 +62,7 @@ logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-log = logging.getLogger("ai-reviewer.web")
+log = logging.getLogger("serge.web")
 
 cfg = Config.from_env(require_app=False, require_web=True)
 log.info(
@@ -1003,9 +1003,7 @@ async def github_app_webhook(request: Request) -> Response:
         {
             "status": "accepted",
             "id": job.id,
-            "url": (
-                f"/reviews/{req.owner}/{req.repo}/{req.number}/{job.id}"
-            ),
+            "url": (f"/reviews/{req.owner}/{req.repo}/{req.number}/{job.id}"),
         },
         status_code=202,
     )

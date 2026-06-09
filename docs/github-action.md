@@ -4,7 +4,7 @@ nav_title: GH Action
 ---
 
 The GitHub Action runs inside the target repository's workflow. It is the
-lowest-friction way to try `ai-reviewer` because it does not require a server
+lowest-friction way to try `serge` because it does not require a server
 or GitHub App.
 
 ## Workflow
@@ -39,14 +39,14 @@ jobs:
           ref: refs/pull/${{ github.event.issue.number || github.event.pull_request.number }}/head
         continue-on-error: true
 
-      - uses: huggingface/ai-reviewer@main
+      - uses: huggingface/serge@main
         with:
           llm_api_key: ${{ secrets.LLM_API_KEY }}
           llm_api_base: ${{ secrets.LLM_API_BASE || 'https://api.openai.com/v1' }}
 ```
 {% endraw %}
 
-Pin `huggingface/ai-reviewer` to a tag or commit SHA when you need
+Pin `huggingface/serge` to a tag or commit SHA when you need
 reproducible behavior.
 
 ## Triggering Reviews

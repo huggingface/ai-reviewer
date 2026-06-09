@@ -16,7 +16,7 @@ logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-log = logging.getLogger("ai-reviewer")
+log = logging.getLogger("serge")
 
 cfg = Config.from_env(require_app=True)
 app = Flask(__name__)

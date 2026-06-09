@@ -1,8 +1,8 @@
-title: ai-reviewer
+title: serge
 description: GitHub-native AI pull request reviews with OpenAI-compatible LLMs.
 theme: minima
-repository_url: https://github.com/huggingface/ai-reviewer
-repository_api_url: https://api.github.com/repos/huggingface/ai-reviewer
+repository_url: https://github.com/huggingface/serge
+repository_api_url: https://api.github.com/repos/huggingface/serge
 
 header_pages:
   - getting-started.md

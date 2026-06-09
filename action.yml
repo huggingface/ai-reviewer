@@ -1,6 +1,6 @@
-name: 'AI Reviewer'
+name: 'Serge'
 description: 'Review pull requests with any OpenAI-compatible LLM and post inline comments on the diff.'
-author: 'ai-reviewer'
+author: 'serge'
 branding:
   icon: 'message-square'
   color: 'purple'

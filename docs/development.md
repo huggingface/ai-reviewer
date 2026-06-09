@@ -5,8 +5,8 @@ title: Development
 ## Install Locally
 
 ```bash
-git clone https://github.com/huggingface/ai-reviewer.git
-cd ai-reviewer
+git clone https://github.com/huggingface/serge.git
+cd serge
 python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[web]'

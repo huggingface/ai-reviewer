@@ -3,7 +3,7 @@ title: Getting Started
 nav_title: Quick Start
 ---
 
-The quickest way to run `ai-reviewer` is the GitHub Action. It needs an LLM API
+The quickest way to run `serge` is the GitHub Action. It needs an LLM API
 key, a workflow file, and a trigger comment on an open pull request.
 
 ## Prerequisites

@@ -42,7 +42,7 @@ def _write_step_summary(message: str) -> None:
         with open(path, "a") as f:
             f.write(f"{message}\n")
     except OSError:
-        logging.getLogger("ai-reviewer.action").debug(
+        logging.getLogger("serge.action").debug(
             "failed to write GitHub step summary", exc_info=True
         )
 
@@ -59,7 +59,7 @@ def _event_payload_is_from_fork(payload: dict) -> bool:
 def _post_failure_comment(
     gh: GitHubClient, req, body: str, *, fork_message: str | None = None
 ) -> None:
-    log = logging.getLogger("ai-reviewer.action")
+    log = logging.getLogger("serge.action")
     try:
         # On inline-comment failures, post the failure as a reply on the
         # same thread so the commenter sees it in-context.
@@ -81,7 +81,7 @@ def main() -> int:
         level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    log = logging.getLogger("ai-reviewer.action")
+    log = logging.getLogger("serge.action")
 
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")

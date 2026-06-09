@@ -1,6 +1,6 @@
-# ai-reviewer
+# serge
 
-`ai-reviewer` reviews GitHub pull requests with an OpenAI-compatible LLM and
+`serge` reviews GitHub pull requests with an OpenAI-compatible LLM and
 posts validated inline comments on the diff. The default reviewer persona is
 Serge, triggered by comments such as `@askserge please review`.
 
@@ -37,4 +37,4 @@ For fork-heavy repositories or hosted deployments, use the
 
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/huggingface/ai-reviewer/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/huggingface/serge/blob/main/LICENSE).

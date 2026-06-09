@@ -751,7 +751,7 @@ def _fetch_url(args: dict[str, Any]) -> str:
             raw,
             timeout=FETCH_TIMEOUT_SECONDS,
             allow_redirects=False,
-            headers={"User-Agent": "ai-reviewer/1.0 (link verification)"},
+            headers={"User-Agent": "serge/1.0 (link verification)"},
         )
     except requests.Timeout as exc:
         raise _ToolError(f"fetch timed out after {FETCH_TIMEOUT_SECONDS}s") from exc

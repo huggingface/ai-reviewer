@@ -77,7 +77,7 @@ class ActionRunnerTests(unittest.TestCase):
         with (
             patch.dict(os.environ, env, clear=True),
             patch("reviewbot.action_runner.run_followup") as run_followup,
-            self.assertLogs("ai-reviewer.action", level="ERROR") as logs,
+            self.assertLogs("serge.action", level="ERROR") as logs,
         ):
             code = action_runner.main()
 
@@ -103,7 +103,7 @@ class ActionRunnerTests(unittest.TestCase):
             patch.dict(os.environ, env, clear=True),
             patch("reviewbot.action_runner.run_followup") as run_followup,
             patch("reviewbot.action_runner.GitHubClient") as github_client,
-            self.assertLogs("ai-reviewer.action", level="WARNING") as logs,
+            self.assertLogs("serge.action", level="WARNING") as logs,
         ):
             github_client.return_value.reply_to_review_comment.side_effect = (
                 requests.HTTPError("403 Resource not accessible by integration")
@@ -184,7 +184,7 @@ class ActionRunnerTests(unittest.TestCase):
             patch.dict(os.environ, env, clear=True),
             patch("reviewbot.action_runner.run_followup", side_effect=llm_error),
             patch("reviewbot.action_runner.GitHubClient") as github_client,
-            self.assertLogs("ai-reviewer.action", level="WARNING") as logs,
+            self.assertLogs("serge.action", level="WARNING") as logs,
         ):
             github_client.return_value.reply_to_review_comment.side_effect = post_error
             code = action_runner.main()

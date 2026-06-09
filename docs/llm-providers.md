@@ -2,7 +2,7 @@
 title: LLM Providers
 ---
 
-`ai-reviewer` talks to OpenAI-compatible chat completion endpoints. The
+`serge` talks to OpenAI-compatible chat completion endpoints. The
 endpoint should support:
 
 ```text

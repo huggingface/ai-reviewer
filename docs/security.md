@@ -2,7 +2,7 @@
 title: Security
 ---
 
-`ai-reviewer` treats PR content as untrusted input.
+`serge` treats PR content as untrusted input.
 
 ## Prompt Injection
 
