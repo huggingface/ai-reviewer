@@ -16,11 +16,18 @@ RUN python -m venv /opt/app/.venv \
     && /opt/app/.venv/bin/pip install --upgrade pip \
     && /opt/app/.venv/bin/pip install -e '.[web]' pytest
 
-# A "host secret" that lives OUTSIDE any worktree; the sandbox must never
-# expose it to a PR-touching subprocess.
-RUN install -d -m 0700 /etc/reviewbot \
+# Host secrets that live OUTSIDE any worktree, owned by the SAME user the
+# review process runs as (mirroring ec2-user owning the GitHub App key and
+# env file at mode 0600). The point of bwrap is same-uid isolation: the
+# review process can read these legitimately, but a PR-author subprocess
+# wrapped by bwrap cannot — even though it runs as the same uid.
+RUN install -d -m 0700 -o app -g app /etc/reviewbot \
     && echo 'TOP-SECRET-GITHUB-APP-KEY' > /etc/reviewbot/github-app.pem \
-    && chmod 0600 /etc/reviewbot/github-app.pem
+    && chmod 0600 /etc/reviewbot/github-app.pem \
+    && chown app:app /etc/reviewbot/github-app.pem \
+    && install -d -m 0750 -o app -g app /var/lib/reviewbot \
+    && echo 'job-records' > /var/lib/reviewbot/jobs.db \
+    && chown app:app /var/lib/reviewbot/jobs.db
 
 ENV PATH="/opt/app/.venv/bin:${PATH}"
 USER app
